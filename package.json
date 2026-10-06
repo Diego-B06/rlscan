@@ -1,0 +1,37 @@
+{
+  "name": "rlscan",
+  "version": "0.1.0",
+  "description": "Free, read-only security scanner for apps on Vercel + Supabase — leaked secrets, missing headers, and RLS misconfigurations that expose your data.",
+  "type": "module",
+  "bin": {
+    "rlscan": "./bin/rlscan.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Diego-B06/rlscan.git"
+  },
+  "homepage": "https://github.com/Diego-B06/rlscan",
+  "bugs": {
+    "url": "https://github.com/Diego-B06/rlscan/issues"
+  },
+  "main": "src/index.js",
+  "license": "MIT",
+  "keywords": [
+    "security",
+    "scanner",
+    "supabase",
+    "vercel",
+    "firebase",
+    "rls",
+    "row-level-security",
+    "secrets",
+    "appsec",
+    "cli"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "commander": "^12.1.0"
+  }
+}
