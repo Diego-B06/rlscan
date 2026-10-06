@@ -1,6 +1,6 @@
 {
   "name": "rlscan",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Free, read-only security scanner for apps on Vercel + Supabase — leaked secrets, missing headers, and RLS misconfigurations that expose your data.",
   "type": "module",
   "bin": {
@@ -29,9 +29,24 @@
     "cli"
   ],
   "engines": {
-    "node": ">=18"
+    "node": ">=18.17"
   },
   "dependencies": {
     "commander": "^12.1.0"
-  }
+  },
+  "scripts": {
+    "test": "node --test",
+    "start": "node bin/rlscan.js"
+  },
+  "files": [
+    "bin",
+    "src",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "author": "BARRSEC <diego@barrsec.com.mx> (https://barrsec.com.mx)"
 }
