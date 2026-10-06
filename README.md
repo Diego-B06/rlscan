@@ -6,7 +6,7 @@ SMB-focused security tools (built around Windows endpoints and Microsoft 365)
 don't cover at all.
 
 ```bash
-npx rlscan https://your-app.vercel.app
+npx github:Diego-B06/rlscan https://your-app.vercel.app
 ```
 
 Runs in seconds. No signup, no agent to install, no credentials beyond the
@@ -35,27 +35,27 @@ public anon key you already ship to the browser.
 
 ```bash
 # Basic scan — headers, leaked secrets, common exposed routes
-npx rlscan https://your-app.vercel.app
+npx github:Diego-B06/rlscan https://your-app.vercel.app
 
 # Also check Supabase RLS exposure
-npx rlscan https://your-app.vercel.app \
+npx github:Diego-B06/rlscan https://your-app.vercel.app \
   --supabase-url https://yourproject.supabase.co \
   --supabase-anon-key eyJhbGciOi...
 
 # If your project doesn't expose its schema to anon, name the tables yourself
-npx rlscan https://your-app.vercel.app \
+npx github:Diego-B06/rlscan https://your-app.vercel.app \
   --supabase-url https://yourproject.supabase.co \
   --supabase-anon-key eyJhbGciOi... \
   --supabase-tables profiles,orders,invoices
 
 # JSON output, for scripting
-npx rlscan https://your-app.vercel.app --json
+npx github:Diego-B06/rlscan https://your-app.vercel.app --json
 
 # CI mode: exit 1 if anything CRITICAL or HIGH is found
-npx rlscan https://your-app.vercel.app --fail-on-high
+npx github:Diego-B06/rlscan https://your-app.vercel.app --fail-on-high
 ```
 
-Or install it globally: `npm install -g rlscan`.
+Or install it globally: `npm install -g github:Diego-B06/rlscan` (then run `rlscan <url>`).
 
 Never pass a `service_role` / `sb_secret_` key — `rlscan` refuses it. Use the
 anon / publishable key your frontend already ships.
