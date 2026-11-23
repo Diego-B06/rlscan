@@ -11,7 +11,9 @@ const EXPECTED_HEADERS = [
   {
     key: 'content-security-policy',
     name: 'Content-Security-Policy',
-    severity: 'high',
+    // Medio y no alto: casi ninguna app en Vercel tiene CSP, y como "alto" hacía
+    // que --fail-on-high fallara en prácticamente cualquier sitio.
+    severity: 'medium',
     why: 'Sin CSP, un XSS inyectado puede ejecutar JS arbitrario sin restricciones.',
   },
   {

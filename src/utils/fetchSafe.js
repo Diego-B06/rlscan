@@ -37,11 +37,14 @@ function describeError(err, timeoutMs) {
  * que manda cabeceras y luego se cuelga ya no puede bloquear el escaneo.
  * Corta la lectura al superar maxBytes. Lanza ScanFetchError con un mensaje claro.
  */
-export async function fetchText(url, { timeoutMs = DEFAULT_TIMEOUT_MS, maxBytes = DEFAULT_MAX_BYTES, headers = {} } = {}) {
+export async function fetchText(
+  url,
+  { timeoutMs = DEFAULT_TIMEOUT_MS, maxBytes = DEFAULT_MAX_BYTES, headers = {}, method = 'GET', body = undefined } = {},
+) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const res = await fetch(url, { signal: controller.signal, headers, redirect: 'follow' });
+    const res = await fetch(url, { signal: controller.signal, headers, method, body, redirect: 'follow' });
     let text = '';
     let truncated = false;
     const reader = res.body?.getReader?.();
@@ -59,6 +62,7 @@ export async function fetchText(url, { timeoutMs = DEFAULT_TIMEOUT_MS, maxBytes 
         }
         text += decoder.decode(value, { stream: true });
       }
+      if (!truncated) text += decoder.decode(); // vacía bytes multibyte pendientes
     }
     return {
       url: res.url || url,

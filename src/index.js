@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { Command } from 'commander';
+import { Command, Option, InvalidArgumentError } from 'commander';
 import { checkHeaders } from './checks/headers.js';
 import { scanForSecrets } from './checks/secrets.js';
 import { checkSupabaseRLS, decodeKeyRole } from './checks/supabase.js';
@@ -27,29 +27,54 @@ function fail(message, json) {
   process.exitCode = 2;
 }
 
+function positiveInt(value) {
+  const n = Number(value);
+  if (!Number.isInteger(n) || n < 1) throw new InvalidArgumentError('debe ser un entero positivo.');
+  return n;
+}
+
 export async function run(argv) {
   const program = new Command();
 
   program
     .name('rlscan')
     .version(version)
-    .description('Escáner de seguridad de solo lectura para apps en Vercel + Supabase/Firebase.')
+    .description('Escáner de seguridad de solo lectura para apps en Vercel + Supabase.')
     .argument('<url>', 'URL de la app desplegada (ej. https://mi-app.vercel.app)')
-    .option('--supabase-url <url>', 'URL del proyecto de Supabase (ej. https://xyzcompany.supabase.co)')
-    .option('--supabase-anon-key <key>', 'Anon/public key de Supabase (nunca uses la service_role key aquí)')
+    .addOption(new Option('--supabase-url <url>', 'URL del proyecto de Supabase (ej. https://xyzcompany.supabase.co)').env('SUPABASE_URL'))
+    .addOption(
+      new Option('--supabase-anon-key <key>', 'Anon/publishable key de Supabase (nunca uses la service_role key aquí)').env('SUPABASE_ANON_KEY'),
+    )
     .option('--supabase-tables <lista>', 'Tablas a probar, separadas por coma (omite el listado automático)')
-    .option('--max-files <n>', 'Máximo de archivos JS a escanear en busca de secretos', (v) => parseInt(v, 10), 80)
+    .option('--no-supabase-autodetect', 'No revisar RLS con el proyecto y la anon key detectados en los bundles del sitio')
+    .option('--max-files <n>', 'Máximo de archivos JS a escanear en busca de secretos', positiveInt, 80)
     .option('--no-routes', 'Omite el chequeo de rutas comunes expuestas (.env, /api/debug, etc.)')
     .option('--json', 'Imprime el resultado en JSON en vez de reporte coloreado')
     .option('--no-color', 'Desactiva los colores')
     .option('--fail-on-high', 'Sale con código 1 si hay hallazgos CRÍTICOS o ALTOS (útil en CI)')
     .addHelpText('after', `\n${DISCLAIMER}`)
-    .parse(argv);
+    .exitOverride();
+
+  try {
+    program.parse(argv);
+  } catch (err) {
+    // --help / --version terminan bien; cualquier error de argumentos es "no se pudo escanear" (2),
+    // nunca 1, que en CI significa "hay hallazgos".
+    process.exitCode = err.code === 'commander.helpDisplayed' || err.code === 'commander.version' ? 0 : 2;
+    return;
+  }
 
   const opts = program.opts();
   const target = normalizeTargetUrl(program.args[0]);
   if (target.error) return fail(target.error, opts.json);
   const url = target.url;
+
+  let supabaseUrl = null;
+  if (opts.supabaseUrl) {
+    const sb = normalizeTargetUrl(opts.supabaseUrl);
+    if (sb.error) return fail(`--supabase-url: ${sb.error}`, opts.json);
+    supabaseUrl = sb.url;
+  }
 
   // Salvaguarda: la service_role se salta RLS y daría falsos positivos (además de ser una llave secreta).
   if (opts.supabaseAnonKey && decodeKeyRole(opts.supabaseAnonKey) === 'service_role') {
@@ -82,15 +107,38 @@ export async function run(argv) {
   ]);
   findings.push(...secretResult.findings, ...routeFindings);
 
-  if (opts.supabaseUrl && opts.supabaseAnonKey) {
-    const tables = opts.supabaseTables ? opts.supabaseTables.split(',').map((t) => t.trim()).filter(Boolean) : null;
-    findings.push(...(await checkSupabaseRLS(opts.supabaseUrl, opts.supabaseAnonKey, { tables })));
-  } else if (opts.supabaseUrl || opts.supabaseAnonKey) {
+  const tables = opts.supabaseTables ? opts.supabaseTables.split(',').map((t) => t.trim()).filter(Boolean) : null;
+  const detected = secretResult.supabase;
+
+  if (supabaseUrl && opts.supabaseAnonKey) {
+    findings.push(...(await checkSupabaseRLS(supabaseUrl, opts.supabaseAnonKey, { tables })));
+  } else if (supabaseUrl || opts.supabaseAnonKey) {
+    // Pedido a mano a medias = error de uso (exit 2). Si viene solo de una variable de entorno
+    // suelta (p. ej. SUPABASE_URL en el shell de desarrollo), solo se avisa.
+    const fromCli = ['supabaseUrl', 'supabaseAnonKey'].some((k) => program.getOptionValueSource(k) === 'cli');
+    findings.push({
+      check: 'supabase',
+      severity: fromCli ? 'error' : 'info',
+      title: 'Chequeo de Supabase incompleto',
+      detail: 'Pasa --supabase-url y --supabase-anon-key juntos (o SUPABASE_URL y SUPABASE_ANON_KEY) para habilitar el chequeo de RLS.',
+    });
+  } else if (opts.supabaseAutodetect !== false && detected?.anonKey) {
     findings.push({
       check: 'supabase',
       severity: 'info',
-      title: 'Chequeo de Supabase omitido',
-      detail: 'Pasa --supabase-url y --supabase-anon-key juntos para habilitar el chequeo de RLS.',
+      title: `Supabase detectado en los bundles: ${detected.url}`,
+      detail:
+        'Se revisó su RLS con la anon key pública que el propio sitio entrega a cada visitante' +
+        `${detected.projects > 1 ? ` (se encontraron ${detected.projects} proyectos; se usó el que tiene llave)` : ''}. ` +
+        'Desactívalo con --no-supabase-autodetect.',
+    });
+    findings.push(...(await checkSupabaseRLS(detected.url, detected.anonKey, { tables, autodetected: true })));
+  } else if (detected) {
+    findings.push({
+      check: 'supabase',
+      severity: 'info',
+      title: `Supabase detectado en los bundles (${detected.url}), sin anon key identificable`,
+      detail: 'Pasa --supabase-url y --supabase-anon-key para revisar su RLS.',
     });
   }
 

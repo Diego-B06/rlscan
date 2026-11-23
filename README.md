@@ -1,6 +1,6 @@
 # rlscan
 
-A free, read-only security scanner for apps on **Vercel + Supabase/Firebase** —
+A free, read-only security scanner for apps on **Vercel + Supabase** —
 the stack most startups and indie hackers actually ship on, and the one most
 SMB-focused security tools (built around Windows endpoints and Microsoft 365)
 don't cover at all.
@@ -17,19 +17,29 @@ public anon key you already ship to the browser.
 - **Missing HTTP security headers** — CSP, HSTS (HTTPS only), X-Frame-Options
   (or CSP `frame-ancestors`), X-Content-Type-Options, Referrer-Policy.
 - **Leaked secrets in shipped JS** — AWS keys, Stripe live/restricted keys,
-  Supabase `service_role` JWTs and `sb_secret_` keys, GitHub / Slack / SendGrid
-  tokens, Anthropic and OpenAI keys, private key blocks. It follows chunks that
-  are lazy-loaded (`import()`, Next.js/Vite build output) up to 3 levels deep.
+  Supabase `service_role` JWTs and `sb_secret_` keys, database connection strings
+  with a password (`postgres://user:pass@…`), Google OAuth client secrets,
+  GitHub / Slack / SendGrid / Resend / Mailgun / Twilio tokens, Anthropic and
+  OpenAI keys, private key blocks. It follows chunks that are lazy-loaded
+  (`import()`, Next.js/Vite build output) up to 3 levels deep.
   A `service_role` key in client code is always critical: it bypasses Row Level
-  Security entirely.
-- **Tables exposed by misconfigured Row Level Security** (optional, needs
-  `--supabase-url` + `--supabase-anon-key`) — reads one row per table through
-  PostgREST using only the public anon key and flags tables that return rows to
-  an anonymous caller. Column *names* are used to raise severity; values are
-  never printed.
+  Security entirely. If the scan is cut short (file cap, 60 s budget, downloads
+  that failed, files over 5 MB) the report says so.
+- **Public source maps** — follows `sourceMappingURL` (and tries `<bundle>.map`
+  for "hidden" source maps, e.g. Sentry uploads), reports them, and scans the
+  original source inside them for secrets.
+- **Tables exposed by misconfigured Row Level Security** — reads one row per table
+  through PostgREST using only the public anon key and flags tables that return
+  rows to an anonymous caller. Column *names* are used to raise severity
+  (`customer_email`, `billingAddress`, …); values are never printed.
+  **No flags needed:** if the site's bundles contain its Supabase URL and anon key
+  (they almost always do), `rlscan` uses them automatically. Also reports RPC
+  functions visible to `anon` (never invoked) and Storage buckets whose files an
+  anonymous caller can list.
 - **Common deployment mistakes** — `.env`, `.git/config`, `wp-config.php`, debug/admin
-  routes. Findings are validated by **content** and compared against a
-  non-existent path, so SPAs that answer `200` to everything don't produce false alarms.
+  routes. Findings are validated by **content** and compared against
+  non-existent paths (at the root and under `/api/`), so SPAs and API catch-alls
+  that answer `200` to everything don't produce false alarms.
 
 ## Usage
 
@@ -37,7 +47,8 @@ public anon key you already ship to the browser.
 # Basic scan — headers, leaked secrets, common exposed routes
 npx github:Diego-B06/rlscan https://your-app.vercel.app
 
-# Also check Supabase RLS exposure
+# Supabase RLS is checked automatically when the site ships its Supabase URL + anon key.
+# To point it at a project explicitly (or in CI, via SUPABASE_URL / SUPABASE_ANON_KEY):
 npx github:Diego-B06/rlscan https://your-app.vercel.app \
   --supabase-url https://yourproject.supabase.co \
   --supabase-anon-key eyJhbGciOi...
@@ -64,9 +75,10 @@ anon / publishable key your frontend already ships.
 
 | Flag | Meaning |
 |---|---|
-| `--supabase-url`, `--supabase-anon-key` | Enable the RLS check (both required) |
+| `--supabase-url`, `--supabase-anon-key` | Check this project's RLS (both required; also read from `SUPABASE_URL` / `SUPABASE_ANON_KEY`) |
+| `--no-supabase-autodetect` | Don't check the Supabase project found in the site's bundles |
 | `--supabase-tables a,b,c` | Probe these tables instead of auto-listing |
-| `--max-files <n>` | Max JS files scanned for secrets (default 80) |
+| `--max-files <n>` | Max JS files scanned for secrets (positive integer, default 80) |
 | `--no-routes` | Skip the common-routes check |
 | `--json` | Machine-readable output (`tool`, `version`, `target`, `summary`, `findings`) |
 | `--no-color` | Plain output (also honors `NO_COLOR`; auto-off when piped) |
@@ -78,7 +90,7 @@ anon / publishable key your frontend already ships.
 |---|---|
 | `0` | Scan completed, nothing blocking (or `--fail-on-high` not set) |
 | `1` | `--fail-on-high` and at least one CRITICAL/HIGH finding |
-| `2` | The scan could **not** be completed (unreachable site, timeout, invalid URL, rejected key) |
+| `2` | The scan could **not** be completed (unreachable site, timeout, invalid arguments, rejected key, or a Supabase check you asked for that couldn't evaluate any table) |
 
 A scan that can't run is never reported as a pass. In CI, treat `2` as a failure.
 
@@ -126,7 +138,7 @@ responsible for how you use it.
 
 ## Roadmap
 
-- [ ] Firebase Security Rules exposure check (Firestore/RTDB)
+- [ ] Firebase Security Rules exposure check (Firestore/RTDB) — not implemented yet; today only Firebase web API keys are reported (as low)
 - [ ] GitHub Action for running this on every deploy
 - [ ] English output / i18n
 - [ ] Optional authenticated mode (diff what an anon vs. a logged-in user can see)
