@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.3.0
+
+### Fixed
+- **Supabase checks that couldn't run looked like a pass.** If every table probe failed (5xx, invalid JSON, timeout) there was no finding at all; a schema that couldn't be listed or an invalid key was only `medium`, so `--fail-on-high` exited `0`. These are now `error` (exit `2`) when you asked for the check; partially failed tables are listed.
+- **`--max-files abc` removed the cap entirely** (`NaN` comparison). It now must be a positive integer. Invalid arguments exit `2` instead of commander's `1`, which meant "findings".
+- **Silent partial secret scans.** Hitting the 60 s budget, bundles that failed to download and files truncated at 5 MB are now reported.
+- **Sensitive columns missed / over-matched.** Column matching is now by word: `customer_email`, `billingAddress`, `contact_phone` escalate to critical; `telemetry` and `cardinality` no longer do.
+- **False positives on `/api/*`** when an API catch-all answers `200` JSON to any path: a second baseline under `/api/` detects it and skips those routes with an info note.
+- Supabase `--supabase-url` passed alone (from the CLI) now fails with exit `2` instead of a silent info; the message says which value came from a flag or an env var.
+- **A blocked or non-existent site looked like a pass.** A `403` bot challenge (Vercel Firewall / Cloudflare) or a `404 DEPLOYMENT_NOT_FOUND` had its error page's headers evaluated and exited `0`. Any non-2xx main page is now `error` (exit `2`) with an explanation; an explicitly requested Supabase check still runs.
+- **Schema listing with publishable keys.** Supabase now answers `401 "Secret API key required"` to anon/publishable keys; rlscan said the key might be wrong. It now explains it and falls back to the tables the site's code queries (`/rest/v1/<table>`, `.from('<table>')`).
+- Tables that don't exist (`404`, `PGRST205`) are reported as info "no existen" instead of medium "could not be evaluated".
+
+### Added
+- **Supabase auto-detection:** the project URL and public anon/publishable key are read from the site's own bundles and RLS is checked without flags (`--no-supabase-autodetect` to disable). Failures in this mode are `medium`, never `error`.
+- **Public source maps:** detected (including `hidden-source-map` uploads) and their original source is scanned for secrets.
+- New secret formats: database connection strings with password, Google OAuth client secret (`GOCSPX-`), Resend, Mailgun, Twilio API key SID.
+- Supabase Storage: buckets an anonymous caller can list, and buckets whose files it can enumerate (private ones are `high`).
+- Supabase RPC functions visible to `anon` are listed (never invoked).
+- `SUPABASE_URL` / `SUPABASE_ANON_KEY` environment variables.
+- When there are more than 50 tables, those with sensitive names are probed first.
+
+### Changed
+- Missing CSP is now **medium** (was high): it made `--fail-on-high` fail on almost every site.
+- Firebase is no longer advertised as supported (only Firebase web API keys are reported); Firestore/RTDB rules remain on the roadmap.
+- Node.js 20+ required; CI runs on Node 20/22/24.
+
 ## 0.2.0
 
 Hardening release, validated against a real local Supabase (Postgres + PostgREST) and a Next.js app.

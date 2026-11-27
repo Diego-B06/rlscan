@@ -23,25 +23,30 @@ export async function checkCommonRoutes(baseUrl) {
   const findings = [];
   const base = baseUrl.replace(/\/$/, '');
 
-  // Línea base: una ruta que seguro no existe. Si responde 200, el sitio tiene fallback
-  // y ningún "200" es una señal por sí mismo; solo cuenta el contenido validado.
-  let fallback = false;
-  let baselineText = null;
-  try {
-    const probe = await fetchText(`${base}/__rlscan_${randomBytes(6).toString('hex')}`, { timeoutMs: 5000 });
-    if (probe.status === 200) {
-      fallback = true;
-      baselineText = probe.text;
+  // Líneas base: rutas que seguro no existen, en la raíz y bajo /api/. Si responden 200, el
+  // sitio tiene fallback y ningún "200" es una señal por sí mismo; solo cuenta el contenido validado.
+  const probe = async (prefix) => {
+    try {
+      const r = await fetchText(`${base}${prefix}/__rlscan_${randomBytes(6).toString('hex')}`, { timeoutMs: 5000 });
+      return r.status === 200 ? r : null;
+    } catch {
+      return null; // sin línea base: seguimos, la validación de contenido protege igual
     }
-  } catch {
-    // sin línea base: seguimos, la validación de contenido protege igual
-  }
+  };
+  const [rootBaseline, apiBaseline] = await Promise.all([probe(''), probe('/api')]);
+  const fallback = Boolean(rootBaseline);
+  // Un catch-all de API que responde 200 con JSON a cualquier ruta hace imposible distinguir
+  // /api/debug real de uno inexistente (el JSON suele incluir la ruta pedida, así que no basta comparar).
+  const apiCatchAll = Boolean(apiBaseline) && !looksLikeHtml(apiBaseline);
 
   const checks = COMMON_PATHS.map(async ({ path, severity, valid }) => {
+    const isApi = path.startsWith('/api/');
+    if (isApi && apiCatchAll) return;
     try {
       const res = await fetchText(`${base}${path}`, { timeoutMs: 5000 });
       if (res.status !== 200) return;
-      if (fallback && res.text === baselineText) return; // misma página de fallback
+      const baseline = isApi && apiBaseline ? apiBaseline : rootBaseline;
+      if (baseline && res.text === baseline.text) return; // misma página de fallback
       if (!valid(res)) return;
       findings.push({
         check: 'routes',
@@ -62,6 +67,14 @@ export async function checkCommonRoutes(baseUrl) {
       severity: 'info',
       title: 'El sitio responde 200 a rutas inexistentes (fallback de SPA)',
       detail: 'Normal en SPAs. Las rutas sensibles se validaron por contenido para evitar falsos positivos.',
+    });
+  }
+  if (apiCatchAll) {
+    findings.push({
+      check: 'routes',
+      severity: 'info',
+      title: 'Las rutas /api/* responden 200 (no HTML) a cualquier ruta',
+      detail: 'Hay un catch-all de API: /api/debug, /api/admin, etc. no se pueden evaluar desde fuera sin falsos positivos. Revísalos en el código.',
     });
   }
   return findings;

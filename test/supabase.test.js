@@ -41,9 +41,11 @@ test('supabase: marca customers (crítico por columnas), products (medio); no ma
 test('supabase: spec bloqueado => advertencia honesta (no "no hay tablas") y --supabase-tables funciona', async () => {
   const srv = await postgrest({ specStatus: 401 });
   const warn = await checkSupabaseRLS(srv.url, KEY);
-  assert.equal(warn[0].severity, 'medium');
+  assert.equal(warn[0].severity, 'error', 'pedido explícito que no puede correr => exit 2');
   assert.match(warn[0].detail, /NO significa/);
   assert.match(warn[0].detail, /--supabase-tables/);
+  const auto = await checkSupabaseRLS(srv.url, KEY, { autodetected: true });
+  assert.equal(auto[0].severity, 'medium', 'en modo autodetectado no rompe el escaneo');
   const manual = await checkSupabaseRLS(srv.url, KEY, { tables: ['customers'] });
   assert.ok(manual.some((x) => x.title.includes('customers')));
   await srv.close();
@@ -52,7 +54,9 @@ test('supabase: spec bloqueado => advertencia honesta (no "no hay tablas") y --s
 test('supabase: todas las tablas 401 => avisa que la llave puede ser inválida', async () => {
   const srv = await postgrest({ tableStatus: { customers: 401, orders_protected: 401, products: 401, invoices_empty: 401 } });
   const f = await checkSupabaseRLS(srv.url, KEY);
-  assert.ok(f.some((x) => /inválida/i.test(x.title)));
+  const e = f.find((x) => x.severity === 'error');
+  assert.ok(e, 'debe ser error (exit 2), no medio');
+  assert.match(e.detail, /inválida/i);
   await srv.close();
 });
 
