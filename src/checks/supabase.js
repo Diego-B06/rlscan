@@ -68,7 +68,11 @@ async function listSchema(supabaseUrl, anonKey) {
     const res = await fetchText(`${baseOf(supabaseUrl)}/rest/v1/`, {
       headers: { ...authHeaders(anonKey), Accept: 'application/openapi+json' },
     });
-    if (!res.ok) return { tables: [], rpcs: [], status: res.status };
+    if (!res.ok) {
+      // Supabase ya no entrega el esquema OpenAPI a llaves anon/publishable: "Secret API key required".
+      const secretRequired = /secret api key required|only secret api keys/i.test(res.text || '');
+      return { tables: [], rpcs: [], status: res.status, secretRequired };
+    }
     const spec = JSON.parse(res.text);
     const paths = Object.keys(spec.paths || {}).map((p) => p.replace(/^\//, '')).filter(Boolean);
     return {
@@ -81,7 +85,7 @@ async function listSchema(supabaseUrl, anonKey) {
   }
 }
 
-/** @returns {{table, state: 'exposed'|'empty'|'blocked'|'error', columns?: string[], status?: number}} */
+/** @returns {{table, state: 'exposed'|'empty'|'missing'|'blocked'|'error', columns?: string[], status?: number}} */
 async function probeTable(supabaseUrl, anonKey, table) {
   try {
     const res = await fetchText(`${baseOf(supabaseUrl)}/rest/v1/${encodeURIComponent(table)}?select=*&limit=1`, {
@@ -89,6 +93,7 @@ async function probeTable(supabaseUrl, anonKey, table) {
       maxBytes: 200_000,
     });
     if (res.status === 401 || res.status === 403) return { table, state: 'blocked', status: res.status };
+    if (res.status === 404) return { table, state: 'missing', status: 404 }; // PGRST205: la tabla no existe
     if (!res.ok) return { table, state: 'error', status: res.status };
     const body = JSON.parse(res.text || '[]');
     if (!Array.isArray(body)) return { table, state: 'error', status: res.status };
@@ -186,7 +191,11 @@ async function checkStorage(supabaseUrl, anonKey) {
  * pidió explícitamente, para que un escaneo fallido nunca parezca aprobado. En modo autodetectado
  * baja a "medium": el usuario no pidió este chequeo y no debe romper su escaneo.
  */
-export async function checkSupabaseRLS(supabaseUrl, anonKey, { tables: explicitTables = null, autodetected = false } = {}) {
+export async function checkSupabaseRLS(
+  supabaseUrl,
+  anonKey,
+  { tables: explicitTables = null, fallbackTables = [], autodetected = false } = {},
+) {
   const findings = [];
   const failSeverity = autodetected ? 'medium' : 'error';
   let tables = explicitTables;
@@ -197,17 +206,29 @@ export async function checkSupabaseRLS(supabaseUrl, anonKey, { tables: explicitT
     tables = listed.tables;
     rpcs = listed.rpcs;
     if (tables.length === 0) {
-      findings.push({
-        check: 'supabase',
-        severity: failSeverity,
-        title: 'No se pudieron listar las tablas de Supabase',
-        detail:
-          `${listed.error ? `Error: ${listed.error}. ` : listed.status ? `/rest/v1/ respondió ${listed.status}. ` : ''}` +
-          'Esto NO significa que no haya tablas expuestas: el esquema puede no ser público para la anon key, ' +
-          'o la URL/llave son incorrectas. Pasa los nombres a revisar con --supabase-tables tabla1,tabla2.',
-      });
-      findings.push(...(await checkStorage(supabaseUrl, anonKey)));
-      return findings;
+      const why = listed.secretRequired
+        ? `/rest/v1/ respondió ${listed.status} "Secret API key required": Supabase ya no entrega la lista de tablas a llaves ` +
+          'anon/publishable (la llave es válida; esto es normal en proyectos nuevos). '
+        : `${listed.error ? `Error: ${listed.error}. ` : listed.status ? `/rest/v1/ respondió ${listed.status}. ` : ''}` +
+          'El esquema puede no ser público para la anon key, o la URL/llave son incorrectas. ';
+      if (fallbackTables.length > 0) {
+        tables = fallbackTables;
+        findings.push({
+          check: 'supabase',
+          severity: 'info',
+          title: `No se pudo listar el esquema; se probaron ${fallbackTables.length} tabla(s) encontradas en el código del sitio`,
+          detail: `${why}Tablas: ${list(fallbackTables)}. Puede haber otras: agrégalas con --supabase-tables.`,
+        });
+      } else {
+        findings.push({
+          check: 'supabase',
+          severity: failSeverity,
+          title: 'No se pudieron listar las tablas de Supabase',
+          detail: `${why}Esto NO significa que no haya tablas expuestas. Pasa los nombres a revisar con --supabase-tables tabla1,tabla2.`,
+        });
+        findings.push(...(await checkStorage(supabaseUrl, anonKey)));
+        return findings;
+      }
     }
   }
 
@@ -232,9 +253,17 @@ export async function checkSupabaseRLS(supabaseUrl, anonKey, { tables: explicitT
 
   const blocked = results.filter((x) => x.state === 'blocked');
   const errored = results.filter((x) => x.state === 'error');
-  const evaluated = results.length - blocked.length - errored.length;
+  const missing = results.filter((x) => x.state === 'missing').map((x) => x.table);
+  const evaluated = results.length - blocked.length - errored.length - missing.length;
 
-  if (evaluated === 0) {
+  if (evaluated === 0 && missing.length === results.length) {
+    findings.push({
+      check: 'supabase',
+      severity: failSeverity,
+      title: 'Ninguna de las tablas indicadas existe en Supabase',
+      detail: `No existen (404): ${list(missing)}. Revisa los nombres (y que estén en el esquema public) o la URL del proyecto.`,
+    });
+  } else if (evaluated === 0) {
     findings.push({
       check: 'supabase',
       severity: failSeverity,
@@ -242,6 +271,7 @@ export async function checkSupabaseRLS(supabaseUrl, anonKey, { tables: explicitT
       detail:
         (blocked.length ? `${blocked.length} respondieron 401/403 (¿anon key inválida o expirada?). ` : '') +
         (errored.length ? `${errored.length} fallaron (error del servidor, respuesta inválida o timeout). ` : '') +
+        (missing.length ? `${missing.length} no existen. ` : '') +
         'Sin ninguna tabla evaluada, "sin hallazgos" no sería un resultado confiable.',
     });
   } else if (errored.length > 0) {
@@ -250,6 +280,15 @@ export async function checkSupabaseRLS(supabaseUrl, anonKey, { tables: explicitT
       severity: 'medium',
       title: `${errored.length} tabla(s) no se pudieron evaluar`,
       detail: `Fallaron con error del servidor, respuesta inválida o timeout: ${list(errored.map((x) => `${x.table}${x.status ? ` (${x.status})` : ''}`))}. Su RLS queda sin verificar.`,
+    });
+  }
+
+  if (missing.length > 0 && missing.length < results.length) {
+    findings.push({
+      check: 'supabase',
+      severity: 'info',
+      title: `${missing.length} tabla(s) no existen`,
+      detail: `Supabase respondió 404 (la tabla no existe en el esquema public): ${list(missing)}.`,
     });
   }
 

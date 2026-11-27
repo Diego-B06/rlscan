@@ -92,27 +92,29 @@ export async function run(argv) {
 
   // 1) La página principal se baja una sola vez: cabeceras + HTML reutilizado para secretos.
   const headerResult = await checkHeaders(url);
-  if (!headerResult.reachable) {
-    // Sitio inalcanzable: no tiene sentido seguir, y NO debe parecer "aprobado".
-    printReport(headerResult.findings, { json: opts.json, noColor: opts.color === false, meta: { tool: 'rlscan', version, target: url } });
-    process.exitCode = 2;
-    return;
-  }
-
   const findings = [...headerResult.findings];
+  let detected = null;
 
-  const [secretResult, routeFindings] = await Promise.all([
-    scanForSecrets(headerResult.finalUrl || url, { html: headerResult.html, maxFiles: opts.maxFiles }),
-    opts.routes === false ? Promise.resolve([]) : checkCommonRoutes(headerResult.finalUrl || url),
-  ]);
-  findings.push(...secretResult.findings, ...routeFindings);
+  if (headerResult.reachable) {
+    const [secretResult, routeFindings] = await Promise.all([
+      scanForSecrets(headerResult.finalUrl || url, { html: headerResult.html, maxFiles: opts.maxFiles }),
+      opts.routes === false ? Promise.resolve([]) : checkCommonRoutes(headerResult.finalUrl || url),
+    ]);
+    findings.push(...secretResult.findings, ...routeFindings);
+    detected = secretResult.supabase;
+  }
+  // Sitio inalcanzable o bloqueado: el hallazgo "error" ya garantiza exit 2 (nunca parece aprobado).
+  // Si el usuario pidió Supabase explícitamente, se revisa igual: no depende del sitio.
 
   const tables = opts.supabaseTables ? opts.supabaseTables.split(',').map((t) => t.trim()).filter(Boolean) : null;
-  const detected = secretResult.supabase;
+  const codeTables = detected?.tables || [];
 
   if (supabaseUrl && opts.supabaseAnonKey) {
-    findings.push(...(await checkSupabaseRLS(supabaseUrl, opts.supabaseAnonKey, { tables })));
+    findings.push(...(await checkSupabaseRLS(supabaseUrl, opts.supabaseAnonKey, { tables, fallbackTables: codeTables })));
   } else if (supabaseUrl || opts.supabaseAnonKey) {
+    const src = (k, flag, env) => (program.getOptionValueSource(k) === 'env' ? `la variable de entorno ${env}` : flag);
+    const given = supabaseUrl ? src('supabaseUrl', '--supabase-url', 'SUPABASE_URL') : src('supabaseAnonKey', '--supabase-anon-key', 'SUPABASE_ANON_KEY');
+    const missing = supabaseUrl ? '--supabase-anon-key (o SUPABASE_ANON_KEY)' : '--supabase-url (o SUPABASE_URL)';
     // Pedido a mano a medias = error de uso (exit 2). Si viene solo de una variable de entorno
     // suelta (p. ej. SUPABASE_URL en el shell de desarrollo), solo se avisa.
     const fromCli = ['supabaseUrl', 'supabaseAnonKey'].some((k) => program.getOptionValueSource(k) === 'cli');
@@ -120,9 +122,9 @@ export async function run(argv) {
       check: 'supabase',
       severity: fromCli ? 'error' : 'info',
       title: 'Chequeo de Supabase incompleto',
-      detail: 'Pasa --supabase-url y --supabase-anon-key juntos (o SUPABASE_URL y SUPABASE_ANON_KEY) para habilitar el chequeo de RLS.',
+      detail: `Se recibió ${given}, pero falta ${missing}. Se necesitan las dos para revisar RLS.`,
     });
-  } else if (opts.supabaseAutodetect !== false && detected?.anonKey) {
+  } else if (opts.supabaseAutodetect !== false && detected?.url && detected.anonKey) {
     findings.push({
       check: 'supabase',
       severity: 'info',
@@ -132,8 +134,8 @@ export async function run(argv) {
         `${detected.projects > 1 ? ` (se encontraron ${detected.projects} proyectos; se usó el que tiene llave)` : ''}. ` +
         'Desactívalo con --no-supabase-autodetect.',
     });
-    findings.push(...(await checkSupabaseRLS(detected.url, detected.anonKey, { tables, autodetected: true })));
-  } else if (detected) {
+    findings.push(...(await checkSupabaseRLS(detected.url, detected.anonKey, { tables, fallbackTables: codeTables, autodetected: true })));
+  } else if (detected?.url) {
     findings.push({
       check: 'supabase',
       severity: 'info',

@@ -38,6 +38,30 @@ const EXPECTED_HEADERS = [
   },
 ];
 
+function explainStatus(res) {
+  const h = res.headers;
+  const s = res.status;
+  const url = res.url;
+  const vercelChallenge = /challenge|deny/i.test(h.get('x-vercel-mitigated') || '');
+  const cfChallenge = /challenge/i.test(h.get('cf-mitigated') || '');
+  const vercelError = h.get('x-vercel-error');
+  if (vercelChallenge || cfChallenge) {
+    return `${url} devolvió un desafío de protección contra bots (${vercelChallenge ? 'Vercel Firewall / Attack Challenge' : 'Cloudflare'}). ` +
+      'rlscan no puede resolverlo, así que ni las cabeceras, ni los bundles JS, ni las rutas se evaluaron. ' +
+      'Desactiva el desafío temporalmente o agrega una regla de bypass para tu escaneo y vuelve a correrlo.';
+  }
+  if (s === 401 || s === 403) {
+    return `${url} respondió ${s} ${res.statusText}: el sitio (o un WAF / protección contra bots / login) bloqueó la petición. ` +
+      'Nada del sitio real se evaluó. Si escaneaste varias veces seguidas, puede ser un bloqueo temporal por frecuencia.';
+  }
+  if (s === 404) {
+    return `${url} respondió 404${vercelError ? ` (${vercelError})` : ''}: la página o el deployment no existe. Revisa la URL.`;
+  }
+  if (s === 429) return `${url} respondió 429: límite de peticiones. Espera un momento y vuelve a intentar.`;
+  if (s >= 500) return `${url} respondió ${s} ${res.statusText}: error del servidor. Nada del sitio real se evaluó.`;
+  return `${url} respondió ${s} ${res.statusText}. Nada del sitio real se evaluó.`;
+}
+
 /**
  * @returns {Promise<{findings: object[], reachable: boolean, html: string|null, finalUrl: string|null}>}
  * La página principal se descarga una sola vez y se reutiliza para el escaneo de secretos.
@@ -57,12 +81,15 @@ export async function checkHeaders(url) {
   }
 
   if (!res.ok) {
-    findings.push({
-      check: 'headers',
-      severity: 'info',
-      title: `El sitio respondió ${res.status}`,
-      detail: `Las cabeceras se evaluaron sobre esa respuesta (${res.status} ${res.statusText}), que puede diferir de la de una página normal.`,
-    });
+    // Una página de bloqueo, de error o de "deployment no encontrado" no es el sitio: evaluar sus
+    // cabeceras y no encontrar secretos en ella daría un "aprobado" falso. Escaneo incompleto (exit 2).
+    return {
+      findings: [{ check: 'headers', severity: 'error', title: `El sitio respondió ${res.status}: no se pudo escanear`, detail: explainStatus(res) }],
+      reachable: false,
+      blockedStatus: res.status,
+      html: null,
+      finalUrl: res.url,
+    };
   }
 
   const isHttps = new URL(res.url).protocol === 'https:';

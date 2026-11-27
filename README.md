@@ -125,6 +125,8 @@ responsible for how you use it.
 
 - The RLS check is a heuristic: a table returning rows to an anon caller
   *might* be intentionally public (a blog's posts table). Review every finding.
+- Supabase no longer lists the schema to anon/publishable keys; `rlscan` probes the tables your site's code queries. Tables the frontend never touches must be passed with `--supabase-tables`.
+- If the site answers with a bot challenge (Vercel Firewall, Cloudflare) the scan stops with exit `2`; allow-list your scanner or pause the challenge.
 - With only the anon key, a table protected by RLS and an **empty table without
   RLS** look identical (empty list). `rlscan` lists those tables as "cannot
   verify" — check them in the Supabase dashboard.

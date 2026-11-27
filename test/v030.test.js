@@ -185,7 +185,7 @@ test('secretos: detecta el proyecto de Supabase y su anon key; nunca usa la serv
   const anon = `${b64({ alg: 'HS256' })}.${b64({ iss: 'supabase', ref, role: 'anon' })}.${'s'.repeat(43)}`;
   const srv = await site({ '/a.js': `createClient("https://${ref}.supabase.co","${anon}")` }, '<script src="/a.js"></script>');
   const { supabase } = await scanForSecrets(srv.url);
-  assert.deepEqual(supabase, { url: `https://${ref}.supabase.co`, anonKey: anon, projects: 1 });
+  assert.deepEqual(supabase, { url: `https://${ref}.supabase.co`, anonKey: anon, projects: 1, tables: [] });
   await srv.close();
 
   const srv2 = await site({ '/a.js': `createClient("https://${ref}.supabase.co","${fakeJwt('service_role')}")` }, '<script src="/a.js"></script>');

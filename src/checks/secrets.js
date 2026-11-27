@@ -44,6 +44,10 @@ const SECRET_PATTERNS = [
 const JWT_RE = /eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g;
 const SUPABASE_URL_RE = /https:\/\/([a-z0-9]{20})\.supabase\.co/g;
 const SB_PUBLISHABLE_RE = /sb_publishable_[A-Za-z0-9_-]{20,}/g;
+// Tablas que el propio código consulta: fetch(`${URL}/rest/v1/pedidos`) y supabase.from('clientes').
+// Se excluye storage.from('bucket') y Array.from(...).
+const REST_TABLE_RE = /\/rest\/v1\/([A-Za-z_][A-Za-z0-9_]{0,62})(?![A-Za-z0-9_])/g;
+const FROM_TABLE_RE = /(?<!\b(?:storage|Array|Object|Buffer|Uint8Array|Set|Map)\s*)\.from\(\s*["'`]([A-Za-z_][A-Za-z0-9_]{0,62})["'`]\s*\)/g;
 const SOURCEMAP_RE = /\/[/*][#@]\s*sourceMappingURL=([^\s'"*]+)/g;
 
 function redact(value) {
@@ -166,6 +170,7 @@ export async function scanForSecrets(url, { html = null, maxFiles = DEFAULT_MAX_
   const supabaseRefs = new Set();
   const anonJwts = []; // { jwt, ref }
   const publishableKeys = new Set();
+  const codeTables = new Set();
 
   const record = (text, source) => {
     for (const hit of matchSecrets(text)) {
@@ -175,6 +180,8 @@ export async function scanForSecrets(url, { html = null, maxFiles = DEFAULT_MAX_
     }
     for (const m of text.matchAll(SUPABASE_URL_RE)) supabaseRefs.add(m[1]);
     for (const k of text.match(SB_PUBLISHABLE_RE) || []) publishableKeys.add(k);
+    for (const m of text.matchAll(REST_TABLE_RE)) if (m[1] !== 'rpc') codeTables.add(m[1]);
+    for (const m of text.matchAll(FROM_TABLE_RE)) codeTables.add(m[1]);
     for (const jwt of new Set(text.match(JWT_RE) || [])) {
       const p = decodeJwtPayload(jwt);
       if (p?.role === 'anon' && !anonJwts.some((a) => a.jwt === jwt)) anonJwts.push({ jwt, ref: p.ref || null });
@@ -337,18 +344,21 @@ export async function scanForSecrets(url, { html = null, maxFiles = DEFAULT_MAX_
     });
   }
 
-  return { findings, scanned, supabase: detectSupabase(supabaseRefs, anonJwts, publishableKeys) };
+  return { findings, scanned, supabase: detectSupabase(supabaseRefs, anonJwts, publishableKeys, [...codeTables]) };
 }
 
-/** Elige el proyecto de Supabase del sitio y una llave PÚBLICA (anon/publishable) que le corresponda. */
-function detectSupabase(refs, anonJwts, publishableKeys) {
-  if (refs.size === 0) return null;
+/**
+ * Elige el proyecto de Supabase del sitio y una llave PÚBLICA (anon/publishable) que le corresponda.
+ * Devuelve también las tablas que el código consulta (sirven aunque la URL venga vacía en el build).
+ */
+function detectSupabase(refs, anonJwts, publishableKeys, tables) {
+  if (refs.size === 0) return tables.length ? { url: null, anonKey: null, projects: 0, tables } : null;
   const refList = [...refs];
   for (const ref of refList) {
     const match = anonJwts.find((a) => a.ref === ref);
-    if (match) return { url: `https://${ref}.supabase.co`, anonKey: match.jwt, projects: refList.length };
+    if (match) return { url: `https://${ref}.supabase.co`, anonKey: match.jwt, projects: refList.length, tables };
   }
   const ref = refList[0];
   const key = (refList.length === 1 && ([...publishableKeys][0] || anonJwts.find((a) => !a.ref)?.jwt)) || null;
-  return { url: `https://${ref}.supabase.co`, anonKey: key, projects: refList.length };
+  return { url: `https://${ref}.supabase.co`, anonKey: key, projects: refList.length, tables };
 }

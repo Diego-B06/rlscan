@@ -8,7 +8,10 @@
 - **Silent partial secret scans.** Hitting the 60 s budget, bundles that failed to download and files truncated at 5 MB are now reported.
 - **Sensitive columns missed / over-matched.** Column matching is now by word: `customer_email`, `billingAddress`, `contact_phone` escalate to critical; `telemetry` and `cardinality` no longer do.
 - **False positives on `/api/*`** when an API catch-all answers `200` JSON to any path: a second baseline under `/api/` detects it and skips those routes with an info note.
-- Supabase `--supabase-url` passed alone (from the CLI) now fails with exit `2` instead of a silent info.
+- Supabase `--supabase-url` passed alone (from the CLI) now fails with exit `2` instead of a silent info; the message says which value came from a flag or an env var.
+- **A blocked or non-existent site looked like a pass.** A `403` bot challenge (Vercel Firewall / Cloudflare) or a `404 DEPLOYMENT_NOT_FOUND` had its error page's headers evaluated and exited `0`. Any non-2xx main page is now `error` (exit `2`) with an explanation; an explicitly requested Supabase check still runs.
+- **Schema listing with publishable keys.** Supabase now answers `401 "Secret API key required"` to anon/publishable keys; rlscan said the key might be wrong. It now explains it and falls back to the tables the site's code queries (`/rest/v1/<table>`, `.from('<table>')`).
+- Tables that don't exist (`404`, `PGRST205`) are reported as info "no existen" instead of medium "could not be evaluated".
 
 ### Added
 - **Supabase auto-detection:** the project URL and public anon/publishable key are read from the site's own bundles and RLS is checked without flags (`--no-supabase-autodetect` to disable). Failures in this mode are `medium`, never `error`.

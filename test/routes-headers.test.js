@@ -51,12 +51,21 @@ test('cabeceras: frame-ancestors en CSP cubre X-Frame-Options', async () => {
   await srv.close();
 });
 
-test('cabeceras: respuesta 404 evalúa y lo explica sin contradecirse', async () => {
+test('cabeceras: un 404/403 NO se evalúa como si fuera el sitio (antes salía como aprobado)', async () => {
   const srv = await startServer((req, res) => send(res, 404, 'no'));
   const r = await checkHeaders(srv.url);
-  const info = r.findings.find((x) => x.severity === 'info');
-  assert.match(info.detail, /se evaluaron/);
-  assert.ok(r.findings.some((x) => x.title.startsWith('Falta cabecera')));
+  assert.equal(r.reachable, false);
+  assert.equal(r.findings.length, 1);
+  assert.equal(r.findings[0].severity, 'error');
+  assert.match(r.findings[0].detail, /no existe/);
+  await srv.close();
+});
+
+test('cabeceras: desafío de Vercel se explica como tal', async () => {
+  const srv = await startServer((req, res) => send(res, 403, '<html>checking</html>', { 'x-vercel-mitigated': 'challenge' }));
+  const r = await checkHeaders(srv.url);
+  assert.equal(r.reachable, false);
+  assert.match(r.findings[0].detail, /Vercel Firewall/);
   await srv.close();
 });
 
